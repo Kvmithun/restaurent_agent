@@ -4,7 +4,7 @@ import { z } from 'zod';
 import { env } from '../../config/env.js';
 import { Menu, Restaurant } from '../../models/index.js';
 import { evaluateAvailability } from '../orders/availability.js';
-import { createOrder } from '../../services/orders.js';
+import { createOrder, transitionOrder } from '../../services/orders.js';
 import { extractionPrompt, responsePrompt } from './prompts.js';
 
 const cartItem = z.object({ dishId: z.string().optional(), dishName: z.string(), requestedQuantity: z.number().int().positive(), confirmedQuantity: z.number().int().nonnegative(), price: z.number().nonnegative().optional() });
@@ -32,12 +32,20 @@ async function interpret(state: typeof State.State) {
 async function validateAvailability(state: typeof State.State) {
   if (state.userRetries > env.MAX_USER_RETRIES) return { currentStage: 'RETRY_LIMIT', response: 'This ordering session has reached its order-attempt limit. Start a new session to continue.' };
   if (state.intent === 'CONFIRM_ORDER') {
+    if (state.orderId) return { currentStage: 'ORDER_IN_PROGRESS', response: `Order ${state.orderId} is currently ${state.orderStatus ?? 'in progress'}. I have not created another order.` };
     if (!state.restaurantId || !state.cart.length || !state.availability.length || state.availability.some((item) => item.confirmedQuantity < 1)) return { currentStage: 'CLARIFICATION', response: 'There is no verified order ready to place. Tell me the restaurant and items you would like.' };
     const order = await createOrder(state.userId, { restaurantId: state.restaurantId, sessionId: state.sessionId, items: state.availability.filter((item) => item.confirmedQuantity > 0).map((item) => ({ dishId: item.dishId, quantity: item.confirmedQuantity })) });
     const created = order as { _id: string; status: string };
     return { orderId: created._id, orderStatus: created.status, currentStage: 'RESTAURANT_CONFIRMATION', cart: state.cart, response: `Your order ${created._id} has been placed and is waiting for the restaurant to respond.` };
   }
-  if (state.intent === 'CANCEL_ORDER') return { cart: [], availability: [], currentStage: 'CANCELLED', response: 'I cleared the current draft. Nothing was placed.' };
+  if (state.intent === 'CANCEL_ORDER') {
+    if (state.orderId && state.orderStatus === 'PENDING_RESTAURANT') {
+      const order = await transitionOrder(state.orderId, state.userId, 'USER', 'CANCELLED');
+      return { orderStatus: order.status, cart: [], availability: [], currentStage: 'CANCELLED', response: 'Your pending order was cancelled.' };
+    }
+    if (state.orderId) return { currentStage: 'ORDER_IN_PROGRESS', response: `Order ${state.orderId} is ${state.orderStatus ?? 'in progress'} and cannot be cancelled at this stage.` };
+    return { cart: [], availability: [], currentStage: 'CANCELLED', response: 'I cleared the current draft. Nothing was placed.' };
+  }
   if (state.intent !== 'ORDER_FOOD') return { currentStage: state.intent === 'UNAVAILABLE' ? 'INCOMPLETE' : 'CONVERSATION', response: state.intent === 'UNAVAILABLE' ? state.response : 'Tell me a restaurant and the dishes and quantities you want, and I’ll check the menu.' };
   let restaurant = state.restaurantId ? await Restaurant.findOne({ _id: state.restaurantId, status: 'ACTIVE', isVerified: true }) : null;
   if (!restaurant && state.restaurantName) restaurant = await Restaurant.findOne({ restaurantName: { $regex: `^${escapeRegex(state.restaurantName)}$`, $options: 'i' }, status: 'ACTIVE', isVerified: true });

@@ -58,7 +58,10 @@ aiRouter.post('/chat/stream', asyncRoute(async (request, response) => {
     let streamed = '';
     for await (const modelStream of stream.messagesFrom('response_generation')) {
       for await (const event of modelStream) {
-        if (event.event === 'content-block-delta' && event.delta.type === 'text-delta') streamed += event.delta.text;
+        if (event.event === 'content-block-delta' && event.delta.type === 'text-delta') {
+          streamed += event.delta.text;
+          send('token', { token: event.delta.text });
+        }
       }
     }
     const finalState: any = await stream.output;
@@ -67,8 +70,6 @@ aiRouter.post('/chat/stream', asyncRoute(async (request, response) => {
     const assistantMessage = { role: 'assistant' as const, content: message, createdAt: new Date().toISOString() };
     const nextState: RestaurantAgentState = { ...state, restaurantId: finalState.restaurantId, deliveryPartnerId: finalState.deliveryPartnerId, intent: finalState.intent, cart: finalState.cart, availability: finalState.availability, orderId: finalState.orderId, workflow: { currentStage: finalState.currentStage, orderStatus: finalState.orderStatus, restaurantStatus: finalState.restaurantStatus, cookingStatus: finalState.cookingStatus, deliveryStatus: finalState.deliveryStatus }, retry: { user: finalState.userRetries, cooking: finalState.cookingRetries, delivery: finalState.deliveryRetries }, result: finalState.result, messages: [...state.messages, userMessage, assistantMessage], updatedAt: new Date().toISOString() };
     await saveActiveSession(nextState);
-    const chunks = message.match(/.{1,24}(?:\s|$)|.{1,24}/g) ?? [message];
-    for (const token of chunks) send('token', { token });
     send('done', { sessionId: state.sessionId, state: { currentStage: finalState.currentStage, result: finalState.result, availability: finalState.availability, orderId: finalState.orderId, orderStatus: finalState.orderStatus } });
     response.end();
   } catch (error) {

@@ -12,6 +12,7 @@ const schema = z.object({
   REDIS_URL: z.string().min(1),
   JWT_SECRET: z.string().min(32, 'JWT_SECRET must contain at least 32 characters'),
   GROQ_API_KEY: z.string().optional().default(''),
+  ADMIN_REVIEW_TOKEN: z.string().refine((value) => !value || value.length >= 32, 'ADMIN_REVIEW_TOKEN must be empty or at least 32 characters').optional().default(''),
   GROQ_MODEL: z.string().default('openai/gpt-oss-120b'),
   FRONTEND_URL: z.string().url().default('http://localhost:5173'),
   MAX_COOK_RETRIES: z.coerce.number().int().nonnegative().default(2),

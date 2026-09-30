@@ -4,6 +4,7 @@ import helmet from 'helmet';
 import { authRouter } from '../routes/auth.js';
 import { platformRouter } from '../routes/platform.js';
 import { aiRouter } from '../routes/ai.js';
+import { adminRouter } from '../routes/admin.js';
 import { env } from '../config/env.js';
 
 export function createApp() {
@@ -14,6 +15,7 @@ export function createApp() {
   app.use(express.json({ limit: '1mb' }));
   app.get('/api/health', (_request, response) => response.json({ status: 'ok' }));
   app.use('/api/auth', authRouter);
+  app.use('/api/admin', adminRouter);
   app.use('/api/ai', aiRouter);
   app.use('/api', platformRouter);
   app.use((_request, response) => response.status(404).json({ error: { code: 'NOT_FOUND', message: 'Route not found' } }));

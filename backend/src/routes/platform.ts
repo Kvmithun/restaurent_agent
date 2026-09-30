@@ -1,13 +1,20 @@
 import { Router } from 'express';
 import { z } from 'zod';
 import { authenticateJWT, requireRole, type AuthRequest } from '../middleware/auth.js';
-import { DeliveryPartner, Menu, Order, Restaurant } from '../models/index.js';
+import { DeliveryPartner, Menu, Order, Restaurant, User } from '../models/index.js';
 import { assignDelivery, createOrder, listOrders, reportFailure, transitionOrder } from '../services/orders.js';
 
 export const platformRouter = Router();
 const idParam = z.string().regex(/^[a-f\d]{24}$/i);
 const asyncRoute = (fn: (request: AuthRequest, response: any) => Promise<unknown>) => (request: AuthRequest, response: any, next: any) => Promise.resolve(fn(request, response)).catch(next);
 platformRouter.use(authenticateJWT);
+
+platformRouter.get('/account/profile', asyncRoute(async (request, response) => {
+  const Model = request.auth!.role === 'USER' ? User : request.auth!.role === 'RESTAURANT' ? Restaurant : DeliveryPartner;
+  const account = await Model.findById(request.auth!.subject).select('-passwordHash').lean();
+  if (!account) return response.status(404).json({ error: { code: 'ACCOUNT_NOT_FOUND', message: 'Account not found' } });
+  response.json({ ...account, role: request.auth!.role });
+}));
 
 platformRouter.get('/restaurants', requireRole('USER'), asyncRoute(async (request, response) => {
   const lat = Number(request.query.lat), lon = Number(request.query.lon);
@@ -27,6 +34,12 @@ platformRouter.patch('/delivery/availability', requireRole('DELIVERY_PARTNER'), 
   const available = z.boolean().parse(request.body.available);
   const partner = await DeliveryPartner.findOneAndUpdate({ _id: request.auth!.subject, status: 'ACTIVE' }, { $set: { isAvailable: available } }, { new: true }).select('isAvailable status');
   if (!partner) return response.status(403).json({ error: { code: 'PARTNER_NOT_ACTIVE', message: 'Delivery account is not active' } });
+  response.json(partner);
+}));
+
+platformRouter.get('/delivery/availability', requireRole('DELIVERY_PARTNER'), asyncRoute(async (request, response) => {
+  const partner = await DeliveryPartner.findById(request.auth!.subject).select('isAvailable status').lean();
+  if (!partner) return response.status(404).json({ error: { code: 'PARTNER_NOT_FOUND', message: 'Delivery partner not found' } });
   response.json(partner);
 }));
 

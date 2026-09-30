@@ -7,6 +7,27 @@ import { redis } from '../infra/connections.js';
 
 const requestSchema = z.object({ restaurantId: z.string().regex(/^[a-f\d]{24}$/i), sessionId: z.string().uuid().optional(), items: z.array(z.object({ dishId: z.string().regex(/^[a-f\d]{24}$/i), quantity: z.number().int().positive().max(50) })).min(1).max(30) });
 
+async function syncSessionWorkflow(order: any) {
+  if (!order.sessionId) return;
+  try {
+    const key = `restaurant:session:${order.sessionId}`;
+    const raw = await redis.get(key);
+    if (!raw) return;
+    const state = JSON.parse(raw);
+    const workflow = {
+      ...state.workflow,
+      currentStage: order.status === 'DELIVERED' ? 'COMPLETED' : order.status === 'FAILED' ? 'FAILED' : order.status,
+      orderStatus: order.status,
+      restaurantStatus: order.restaurantStatus,
+      cookingStatus: order.cookingStatus,
+      deliveryStatus: order.deliveryStatus,
+    };
+    await redis.set(key, JSON.stringify({ ...state, orderId: order.id ?? order._id?.toString(), restaurantId: order.restaurantId?.toString(), deliveryPartnerId: order.deliveryPartnerId?.toString(), workflow, result: order.status === 'DELIVERED' ? 'COMPLETE' : 'INCOMPLETE', updatedAt: new Date().toISOString() }), 'EX', env.SESSION_TTL_SECONDS);
+  } catch (error) {
+    console.error(JSON.stringify({ event: 'session.workflow_sync_failed', sessionId: order.sessionId, message: error instanceof Error ? error.message : 'unknown' }));
+  }
+}
+
 export async function createOrder(userId: string, input: unknown) {
   const data = requestSchema.parse(input);
   if (data.sessionId) {
@@ -88,17 +109,8 @@ export async function transitionOrder(orderId: string, actorId: string, role: 'U
   if (!updated) throw Object.assign(new Error('Order changed during this action; refresh and try again'), { status: 409, code: 'ORDER_STATE_CONFLICT' });
   if (nextStatus === 'DELIVERED') {
     if (updated.deliveryPartnerId) await DeliveryPartner.updateOne({ _id: updated.deliveryPartnerId }, { $set: { isAvailable: true } });
-    if (updated.sessionId) {
-      try {
-        const key = `restaurant:session:${updated.sessionId}`;
-        const raw = await redis.get(key);
-        if (raw) {
-          const state = JSON.parse(raw);
-          await redis.set(key, JSON.stringify({ ...state, result: 'COMPLETE', workflow: { ...state.workflow, currentStage: 'COMPLETED', orderStatus: 'DELIVERED', deliveryStatus: 'DELIVERED' }, updatedAt: new Date().toISOString() }), 'EX', env.SESSION_TTL_SECONDS);
-        }
-      } catch (error) { console.error(JSON.stringify({ event: 'session.completion_update_failed', sessionId: updated.sessionId, message: error instanceof Error ? error.message : 'unknown' })); }
-    }
   }
+  await syncSessionWorkflow(updated);
   return updated.toJSON();
 }
 
@@ -126,7 +138,7 @@ export async function reportFailure(orderId: string, actorId: string, role: 'RES
   const currentStatus = order.status;
   const attemptNumber = order.retry[field] + 1;
   const max = field === 'cooking' ? env.MAX_COOK_RETRIES : env.MAX_DELIVERY_RETRIES;
-  const exhausted = attemptNumber >= max;
+  const exhausted = attemptNumber > max;
   const nextStatus = exhausted ? 'FAILED' : field === 'cooking' ? 'RESTAURANT_ACCEPTED' : 'DELIVERY_ASSIGNED';
   const session = await mongoose.startSession();
   let updated: any;
@@ -141,15 +153,6 @@ export async function reportFailure(orderId: string, actorId: string, role: 'RES
   } finally { await session.endSession(); }
   if (!updated) throw Object.assign(new Error('Order changed during this action; refresh and try again'), { status: 409, code: 'ORDER_STATE_CONFLICT' });
   if (exhausted && field === 'delivery' && updated.deliveryPartnerId) await DeliveryPartner.updateOne({ _id: updated.deliveryPartnerId }, { $set: { isAvailable: true } });
-  if (exhausted && order.sessionId) {
-    try {
-      const key = `restaurant:session:${order.sessionId}`;
-      const raw = await redis.get(key);
-      if (raw) {
-        const state = JSON.parse(raw);
-        await redis.set(key, JSON.stringify({ ...state, result: 'INCOMPLETE', workflow: { ...state.workflow, currentStage: `${field.toUpperCase()}_FAILED`, orderStatus: 'FAILED' }, updatedAt: new Date().toISOString() }), 'EX', env.SESSION_TTL_SECONDS);
-      }
-    } catch (error) { console.error(JSON.stringify({ event: 'session.failure_update_failed', sessionId: order.sessionId, message: error instanceof Error ? error.message : 'unknown' })); }
-  }
+  await syncSessionWorkflow(updated);
   return { order: updated.toJSON(), exhausted };
 }
