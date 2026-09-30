@@ -19,7 +19,7 @@ export async function uploadFile<T>(path: string, file: File, fields: Record<str
   return data as T;
 }
 
-export async function streamChat(message: string, sessionId: string | undefined, onToken: (token: string) => void): Promise<{ sessionId: string }> {
+export async function streamChat(message: string, sessionId: string | undefined, onToken: (token: string) => void, onReplace?: (message: string) => void): Promise<{ sessionId: string }> {
   const response = await fetch(`${API_URL}/ai/chat/stream`, { method: 'POST', headers: { 'content-type': 'application/json', authorization: `Bearer ${getToken()}` }, body: JSON.stringify({ message, sessionId }) });
   if (!response.ok || !response.body) { const error = await response.json().catch(() => ({})); throw new Error(error?.error?.message ?? 'Could not connect to the assistant'); }
   const reader = response.body.getReader(), decoder = new TextDecoder(); let buffer = '', result: { sessionId: string } | null = null;
@@ -29,6 +29,7 @@ export async function streamChat(message: string, sessionId: string | undefined,
     if (!eventName || !dataLine) return;
     const data = JSON.parse(dataLine);
     if (eventName === 'token') onToken(String(data.token ?? ''));
+    if (eventName === 'replace') onReplace?.(String(data.message ?? ''));
     if (eventName === 'done') result = { sessionId: data.sessionId };
     if (eventName === 'error') throw new Error(data.message ?? 'Assistant request failed');
   }

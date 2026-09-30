@@ -67,6 +67,7 @@ aiRouter.post('/chat/stream', asyncRoute(async (request, response) => {
     const finalState: any = await stream.output;
     if (!finalState) { send('error', { message: 'The assistant did not return a completed response. Please retry.' }); response.end(); return; }
     const message = String(finalState.response ?? streamed);
+    if (streamed !== message) send('replace', { message });
     const assistantMessage = { role: 'assistant' as const, content: message, createdAt: new Date().toISOString() };
     const nextState: RestaurantAgentState = { ...state, restaurantId: finalState.restaurantId, deliveryPartnerId: finalState.deliveryPartnerId, intent: finalState.intent, cart: finalState.cart, availability: finalState.availability, orderId: finalState.orderId, workflow: { currentStage: finalState.currentStage, orderStatus: finalState.orderStatus, restaurantStatus: finalState.restaurantStatus, cookingStatus: finalState.cookingStatus, deliveryStatus: finalState.deliveryStatus }, retry: { user: finalState.userRetries, cooking: finalState.cookingRetries, delivery: finalState.deliveryRetries }, result: finalState.result, messages: [...state.messages, userMessage, assistantMessage], updatedAt: new Date().toISOString() };
     await saveActiveSession(nextState);
