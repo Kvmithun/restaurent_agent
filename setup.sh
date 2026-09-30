@@ -44,16 +44,11 @@ else
   npm install
 fi
 
-BREW_COMMAND="$(command -v brew || true)"
-if [[ -x /opt/homebrew/bin/brew ]]; then BREW_COMMAND=/opt/homebrew/bin/brew; fi
-if [[ -n "$BREW_COMMAND" ]]; then
-  echo "🔴 Starting Redis with Homebrew if it is installed..."
-  "$BREW_COMMAND" services start redis || true
-fi
-if command -v redis-cli >/dev/null 2>&1; then
-  redis-cli ping 2>/dev/null | grep -q PONG && echo "✅ Redis is reachable." || echo "⚠️ Redis did not respond; start Redis before running the backend."
+echo "🔴 Checking Redis..."
+if "$ROOT_DIR/redis-local.sh"; then
+  echo "✅ Redis is ready."
 else
-  echo "⚠️ redis-cli is not installed. The backend requires a Redis service to start."
+  echo "⚠️ Start a Redis service or run 'docker compose up -d redis' before the backend."
 fi
 
 if [[ ! -f .env ]]; then

@@ -4,6 +4,8 @@ set -Eeuo pipefail
 ROOT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 cd "$ROOT_DIR"
 
+"$ROOT_DIR/redis-local.sh"
+
 NODE_COMMAND="$(command -v node || true)"
 if [[ -z "$NODE_COMMAND" ]] || ! NODE_VERSION="$("$NODE_COMMAND" --version 2>/dev/null)"; then
   CODEX_NODE="$HOME/.cache/codex-runtimes/codex-primary-runtime/dependencies/node/bin/node"

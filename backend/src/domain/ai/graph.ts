@@ -34,7 +34,7 @@ async function validateAvailability(state: typeof State.State) {
   if (state.intent === 'CONFIRM_ORDER') {
     if (state.orderId) return { currentStage: 'ORDER_IN_PROGRESS', response: `Order ${state.orderId} is currently ${state.orderStatus ?? 'in progress'}. I have not created another order.` };
     if (!state.restaurantId || !state.cart.length || !state.availability.length || state.availability.some((item) => item.confirmedQuantity < 1)) return { currentStage: 'CLARIFICATION', response: 'There is no verified order ready to place. Tell me the restaurant and items you would like.' };
-    const order = await createOrder(state.userId, { restaurantId: state.restaurantId, sessionId: state.sessionId, items: state.availability.filter((item) => item.confirmedQuantity > 0).map((item) => ({ dishId: item.dishId, quantity: item.confirmedQuantity })) });
+    const order = await createOrder(state.userId, { restaurantId: state.restaurantId, sessionId: state.sessionId, userAttemptNumber: state.userRetries, items: state.availability.filter((item) => item.confirmedQuantity > 0).map((item) => ({ dishId: item.dishId, quantity: item.confirmedQuantity })) });
     const created = order as { _id: string; status: string };
     return { orderId: created._id, orderStatus: created.status, currentStage: 'RESTAURANT_CONFIRMATION', cart: state.cart, response: `Your order ${created._id} has been placed and is waiting for the restaurant to respond.` };
   }

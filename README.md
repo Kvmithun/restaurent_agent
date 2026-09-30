@@ -19,6 +19,7 @@ Node.js 20+, npm, MongoDB, Redis, and a Groq API key for AI features.
 1. Configure the root `.env` with MongoDB, Redis, JWT, Groq, and operator-review settings. Do not commit this file.
 2. Run `npm install` from the repository root.
 3. Run `./dev.sh` to start both workspaces. You can also use `npm run dev` when Node.js is correctly installed for your processor architecture.
+4. Or run `docker compose up --build` to start the web app at `http://localhost:8080` with Redis in a container. MongoDB Atlas and Groq values are read from the root `.env`.
 
 The backend health route is `GET /api/health`. Business decisions remain deterministic and do not rely on generated model text. Use the `ADMIN_REVIEW_TOKEN` from `.env` at `/admin/review` to inspect documents and approve/reject restaurant and delivery registrations. Set `UPLOAD_DIRECTORY` to a private local path; production multi-instance deployments need shared private object storage.
 

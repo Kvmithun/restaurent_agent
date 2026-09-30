@@ -1,0 +1,9 @@
+.env
+.git
+.idea
+node_modules
+**/node_modules
+**/dist
+**/coverage
+**/private_uploads
+*.tsbuildinfo

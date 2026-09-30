@@ -3,6 +3,7 @@ node_modules/
 dist/
 coverage/
 private_uploads/
+.runtime/
 .env
 .env.*
 !.env.example

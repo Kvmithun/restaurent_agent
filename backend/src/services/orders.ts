@@ -5,7 +5,7 @@ import { FailedSession, Menu, Order, OrderAttempt, Restaurant, User, DeliveryPar
 import { isAllowedOrderTransition } from '../domain/orders/transitions.js';
 import { redis } from '../infra/connections.js';
 
-const requestSchema = z.object({ restaurantId: z.string().regex(/^[a-f\d]{24}$/i), sessionId: z.string().uuid().optional(), items: z.array(z.object({ dishId: z.string().regex(/^[a-f\d]{24}$/i), quantity: z.number().int().positive().max(50) })).min(1).max(30) });
+const requestSchema = z.object({ restaurantId: z.string().regex(/^[a-f\d]{24}$/i), sessionId: z.string().uuid().optional(), userAttemptNumber: z.number().int().positive().optional(), items: z.array(z.object({ dishId: z.string().regex(/^[a-f\d]{24}$/i), quantity: z.number().int().positive().max(50) })).min(1).max(30) });
 
 async function syncSessionWorkflow(order: any) {
   if (!order.sessionId) return;
@@ -54,9 +54,16 @@ export async function createOrder(userId: string, input: unknown) {
       }
       const total = items.reduce((sum, item) => sum + item.price * item.quantity, 0);
       const [order] = await Order.create([{ userId, restaurantId: restaurant._id, sessionId: data.sessionId, items, total, deliveryAddress: user.address }], { session });
+      await OrderAttempt.create([{ orderId: order._id, sessionId: data.sessionId, attemptType: 'USER', attemptNumber: data.userAttemptNumber ?? 1, status: 'SUCCEEDED', reason: 'User confirmed order' }], { session });
       result = order.toJSON();
     });
     return result;
+  } catch (error) {
+    if (data.sessionId) {
+      const detail = error as Error & { code?: string; status?: number };
+      await OrderAttempt.create({ sessionId: data.sessionId, attemptType: 'USER', attemptNumber: data.userAttemptNumber ?? 1, status: 'FAILED', reason: (detail.code ?? detail.message ?? 'Order attempt failed').slice(0, 500) }).catch(() => undefined);
+    }
+    throw error;
   } finally { await session.endSession(); }
 }
 

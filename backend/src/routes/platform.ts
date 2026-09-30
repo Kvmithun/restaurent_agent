@@ -5,7 +5,7 @@ import multer from 'multer';
 import { createReadStream } from 'node:fs';
 import path from 'node:path';
 import { authenticateJWT, requireRole, type AuthRequest } from '../middleware/auth.js';
-import { AccountDocument, DeliveryPartner, Menu, MenuImport, Order, Restaurant, User } from '../models/index.js';
+import { AccountDocument, DeliveryPartner, Menu, MenuImport, Order, OrderAttempt, Restaurant, User } from '../models/index.js';
 import { assignDelivery, createOrder, listOrders, reportFailure, transitionOrder } from '../services/orders.js';
 import { createMenuImport, saveAccountDocument } from '../services/documents.js';
 import { env } from '../config/env.js';
@@ -132,6 +132,15 @@ platformRouter.get('/orders/:orderId', requireRole('USER', 'RESTAURANT', 'DELIVE
   const order = await Order.findOne(filter).lean();
   if (!order) return response.status(404).json({ error: { code: 'ORDER_NOT_FOUND', message: 'Order not found' } });
   response.json(order);
+}));
+
+platformRouter.get('/orders/:orderId/attempts', requireRole('USER', 'RESTAURANT', 'DELIVERY_PARTNER'), asyncRoute(async (request, response) => {
+  const orderId = idParam.parse(request.params.orderId);
+  const role = request.auth!.role, actorId = request.auth!.subject;
+  const filter = role === 'USER' ? { _id: orderId, userId: actorId } : role === 'RESTAURANT' ? { _id: orderId, restaurantId: actorId } : { _id: orderId, deliveryPartnerId: actorId };
+  const order: any = await Order.findOne(filter).select('_id sessionId').lean();
+  if (!order) return response.status(404).json({ error: { code: 'ORDER_NOT_FOUND', message: 'Order not found' } });
+  response.json(await OrderAttempt.find({ $or: [{ orderId }, ...(order.sessionId ? [{ sessionId: order.sessionId }] : [])] }).sort({ createdAt: 1 }).lean());
 }));
 
 platformRouter.post('/orders/:orderId/transition', requireRole('USER', 'RESTAURANT', 'DELIVERY_PARTNER'), asyncRoute(async (request, response) => {

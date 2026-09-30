@@ -21,7 +21,7 @@ aiRouter.post('/sessions/:sessionId/chat', asyncRoute(async (request, response) 
   if (!saved) return response.status(404).json({ error: { code: 'SESSION_NOT_FOUND', message: 'Ordering session expired or not found' } });
   const userMessage = { role: 'user' as const, content: body.message, createdAt: new Date().toISOString() };
   const input = { ...saved, input: body.message, messages: [...saved.messages, userMessage] };
-  const result = await orderingGraph.invoke(input, { configurable: { thread_id: saved.sessionId } });
+  const result = await orderingGraph.invoke({ ...input, userRetries: saved.retry.user, cookingRetries: saved.retry.cooking, deliveryRetries: saved.retry.delivery }, { configurable: { thread_id: saved.sessionId } });
   const assistantMessage = { role: 'assistant' as const, content: result.response, createdAt: new Date().toISOString() };
   const nextState: RestaurantAgentState = {
     ...saved, restaurantId: result.restaurantId, deliveryPartnerId: result.deliveryPartnerId, intent: result.intent,
@@ -39,7 +39,7 @@ aiRouter.post('/chat', asyncRoute(async (request, response) => {
   const state = body.sessionId ? await loadActiveSession(body.sessionId, request.auth!.subject) : await createActiveSession(request.auth!.subject);
   if (!state) return response.status(404).json({ error: { code: 'SESSION_NOT_FOUND', message: 'Ordering session expired or not found' } });
   const userMessage = { role: 'user' as const, content: body.message, createdAt: new Date().toISOString() };
-  const result = await orderingGraph.invoke({ ...state, input: body.message, messages: [...state.messages, userMessage] }, { configurable: { thread_id: state.sessionId } });
+  const result = await orderingGraph.invoke({ ...state, input: body.message, userRetries: state.retry.user, cookingRetries: state.retry.cooking, deliveryRetries: state.retry.delivery, messages: [...state.messages, userMessage] }, { configurable: { thread_id: state.sessionId } });
   const assistantMessage = { role: 'assistant' as const, content: result.response, createdAt: new Date().toISOString() };
   const nextState: RestaurantAgentState = { ...state, restaurantId: result.restaurantId, intent: result.intent, cart: result.cart, availability: result.availability, orderId: result.orderId, workflow: { currentStage: result.currentStage, orderStatus: result.orderStatus }, retry: { user: result.userRetries, cooking: result.cookingRetries, delivery: result.deliveryRetries }, result: result.result, messages: [...state.messages, userMessage, assistantMessage], updatedAt: new Date().toISOString() };
   await saveActiveSession(nextState);
@@ -54,7 +54,7 @@ aiRouter.post('/chat/stream', asyncRoute(async (request, response) => {
   const send = (event: string, data: unknown) => response.write(`event: ${event}\ndata: ${JSON.stringify(data)}\n\n`);
   try {
     const userMessage = { role: 'user' as const, content: body.message, createdAt: new Date().toISOString() };
-    const stream = await orderingGraph.streamEvents({ ...state, input: body.message, messages: [...state.messages, userMessage] }, { configurable: { thread_id: state.sessionId }, version: 'v3' });
+    const stream = await orderingGraph.streamEvents({ ...state, input: body.message, userRetries: state.retry.user, cookingRetries: state.retry.cooking, deliveryRetries: state.retry.delivery, messages: [...state.messages, userMessage] }, { configurable: { thread_id: state.sessionId }, version: 'v3' });
     let streamed = '';
     for await (const modelStream of stream.messagesFrom('response_generation')) {
       for await (const event of modelStream) {
