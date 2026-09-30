@@ -62,7 +62,8 @@ export async function createMenuImport(input: { restaurantId: string; file: { or
     const items = await extractMenu(input.file.buffer, kind);
     return await MenuImport.create({ restaurantId: input.restaurantId, documentId: doc._id, items, status: 'DRAFT' });
   } catch (error) {
-    throw Object.assign(new Error(`The upload was saved, but menu extraction failed: ${error instanceof Error ? error.message : 'unknown error'}`), { status: 422, code: 'MENU_EXTRACTION_FAILED' });
+    const draft = await MenuImport.create({ restaurantId: input.restaurantId, documentId: doc._id, items: [], status: 'DRAFT' });
+    return { ...draft.toObject(), extractionWarning: `We couldn't read the menu photo automatically${error instanceof Error ? ` (${error.message})` : ''}. Add the dishes below and save the menu manually.` };
   }
 }
 

@@ -19,7 +19,8 @@ export async function register(input: unknown) {
   const { role, password, ...profile } = data;
   const Model = modelByRole[role];
   const addressLocation = await geocodeAddress(profile.address, role === 'RESTAURANT' ? (profile as any).restaurantName : undefined).then((result) => result?.point).catch(() => undefined);
-  const created = await Model.create({ ...profile, ...(addressLocation ? { location: addressLocation } : {}), passwordHash: await bcrypt.hash(password, 12) });
+  const demoApproval = process.env.NODE_ENV !== 'production' && role !== 'USER';
+  const created = await Model.create({ ...profile, ...(addressLocation ? { location: addressLocation } : {}), ...(demoApproval ? { status: 'ACTIVE', ...(role === 'RESTAURANT' ? { isVerified: true } : {}) } : {}), passwordHash: await bcrypt.hash(password, 12) });
   return issueToken(created.id, role);
 }
 
@@ -29,6 +30,11 @@ export async function login(input: unknown) {
   const account = await Model.findOne({ email: data.email.toLowerCase() }).select('+passwordHash');
   if (!account || !await bcrypt.compare(data.password, account.passwordHash)) throw Object.assign(new Error('Email or password is incorrect'), { status: 401, code: 'INVALID_CREDENTIALS' });
   if (account.status === 'SUSPENDED') throw Object.assign(new Error('Account is suspended'), { status: 403, code: 'ACCOUNT_SUSPENDED' });
+  if (process.env.NODE_ENV !== 'production' && data.role !== 'USER' && account.status === 'PENDING') {
+    account.status = 'ACTIVE';
+    if (data.role === 'RESTAURANT') (account as typeof account & { isVerified?: boolean }).isVerified = true;
+    await account.save();
+  }
   return issueToken(account.id, data.role);
 }
 
