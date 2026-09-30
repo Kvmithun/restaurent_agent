@@ -62,7 +62,10 @@ export async function createOrder(userId: string, input: unknown) {
 
 export async function listOrders(role: 'USER' | 'RESTAURANT' | 'DELIVERY_PARTNER', actorId: string) {
   const filter = role === 'USER' ? { userId: actorId } : role === 'RESTAURANT' ? { restaurantId: actorId } : { deliveryPartnerId: actorId };
-  return Order.find(filter).sort({ createdAt: -1 }).lean();
+  return Order.find(filter).sort({ createdAt: -1 })
+    .populate('restaurantId', 'restaurantName address location')
+    .populate('userId', 'name phone address location')
+    .lean();
 }
 
 export async function transitionOrder(orderId: string, actorId: string, role: 'USER' | 'RESTAURANT' | 'DELIVERY_PARTNER', nextStatus: string, details: Record<string, unknown> = {}) {
