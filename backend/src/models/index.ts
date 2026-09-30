@@ -69,6 +69,7 @@ export const AccountDocument = mongoose.models.AccountDocument ?? mongoose.model
   ownerId: { type: Schema.Types.ObjectId, required: true, index: true }, ownerRole: { type: String, enum: ['RESTAURANT', 'DELIVERY_PARTNER'], required: true },
   category: { type: String, enum: ['FSSAI', 'DRIVING_LICENCE', 'VEHICLE_PHOTO', 'MENU'], required: true },
   originalName: { type: String, required: true }, storageName: { type: String, required: true, unique: true }, contentType: { type: String, required: true },
+  aiReview: { status: { type: String, enum: ['READY_FOR_MENU', 'NEEDS_REVIEW', 'REVIEW_FAILED'] }, isFssaiDocument: Boolean, readable: Boolean, licenseNumber: String, registeredName: String, validUntil: String, confidence: { type: String, enum: ['HIGH', 'MEDIUM', 'LOW'] }, findings: { type: [String], default: undefined }, reviewedAt: Date },
 }, { timestamps: true, versionKey: false }));
 
 export const MenuImport = mongoose.models.MenuImport ?? mongoose.model('MenuImport', new Schema({

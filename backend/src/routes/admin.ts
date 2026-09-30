@@ -65,7 +65,7 @@ adminRouter.get('/pending', async (_request, response, next) => {
       DeliveryPartner.find({ status: 'PENDING' }).select('-passwordHash').lean(),
     ]);
     const owners = [...restaurants.map((account) => account._id), ...deliveryPartners.map((account) => account._id)];
-    const documents = await AccountDocument.find({ ownerId: { $in: owners } }).select('ownerId category originalName contentType createdAt').sort({ createdAt: -1 }).lean();
+    const documents = await AccountDocument.find({ ownerId: { $in: owners } }).select('ownerId category originalName contentType createdAt aiReview').sort({ createdAt: -1 }).lean();
     return response.json({ restaurants, deliveryPartners, documents });
   } catch (error) { return next(error); }
 });

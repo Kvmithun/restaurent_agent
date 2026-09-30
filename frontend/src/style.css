@@ -51,4 +51,7 @@ textarea { width: 100%; padding: .8rem; border: 1px solid #d8cfc1; border-radius
 .distance-info { margin: .75rem 0; padding: .7rem .9rem; background: #f4ede3; border-radius: 9px; }
 .distance-info p { margin: .15rem 0; font-size: .9rem; }
 .distance-info small { color: #625c52; }
+.ai-review { margin: 1rem 0; padding: 1rem; border: 1px solid #e8e0d3; border-radius: 10px; background: #f8f5ef; }
+.ai-review p { margin: .35rem 0; }
+.ai-review small { color: #625c52; }
 @media (max-width: 640px) { main { margin: 3vh 1rem; padding: 1.5rem; } .topbar { padding: 1rem; } .topbar nav { gap: .6rem; } .menu-item { align-items: flex-start; flex-direction: column; } }

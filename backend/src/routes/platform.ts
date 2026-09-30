@@ -3,11 +3,12 @@ import { rateLimit } from 'express-rate-limit';
 import { z } from 'zod';
 import multer from 'multer';
 import { createReadStream } from 'node:fs';
+import { readFile } from 'node:fs/promises';
 import path from 'node:path';
 import { authenticateJWT, requireRole, type AuthRequest } from '../middleware/auth.js';
 import { AccountDocument, DeliveryPartner, Menu, MenuImport, Order, OrderAttempt, Restaurant, User } from '../models/index.js';
 import { assignDelivery, createOrder, listOrders, reportFailure, transitionOrder } from '../services/orders.js';
-import { createMenuImport, saveAccountDocument } from '../services/documents.js';
+import { createMenuImport, reviewFssaiDocument, saveAccountDocument } from '../services/documents.js';
 import { env } from '../config/env.js';
 import { geocodeAddress, pointFromCoordinates, roadRoute, straightLineMeters } from '../services/geo.js';
 
@@ -26,18 +27,54 @@ platformRouter.get('/account/profile', asyncRoute(async (request, response) => {
 }));
 
 platformRouter.get('/documents', requireRole('RESTAURANT', 'DELIVERY_PARTNER'), asyncRoute(async (request, response) => {
-  response.json(await AccountDocument.find({ ownerId: request.auth!.subject, ownerRole: request.auth!.role }).select('category originalName contentType createdAt').sort({ createdAt: -1 }).lean());
+  response.json(await AccountDocument.find({ ownerId: request.auth!.subject, ownerRole: request.auth!.role }).select('category originalName contentType createdAt aiReview').sort({ createdAt: -1 }).lean());
 }));
+
+async function runFssaiReview(ownerId: string, document: any, buffer: Buffer) {
+  const restaurant: any = await Restaurant.findById(ownerId).select('restaurantName fssaiNumber').lean();
+  if (!restaurant) throw Object.assign(new Error('Restaurant account not found'), { status: 404, code: 'RESTAURANT_NOT_FOUND' });
+  let aiReview: any;
+  try {
+    aiReview = await reviewFssaiDocument({ buffer, mimeType: document.contentType, restaurantName: restaurant.restaurantName, expectedLicenseNumber: restaurant.fssaiNumber });
+  } catch {
+    aiReview = { status: 'REVIEW_FAILED', findings: ['AI screening could not complete. Retry the review or ask an operator to inspect the file.'], reviewedAt: new Date() };
+  }
+  await AccountDocument.updateOne({ _id: document._id, ownerId, category: 'FSSAI' }, { $set: { aiReview } });
+  await Restaurant.updateOne({ _id: ownerId }, { $set: { fssaiDocument: document._id } });
+  return aiReview;
+}
+
+async function requireMenuDraftAccess(restaurantId: string) {
+  const restaurant: any = await Restaurant.findById(restaurantId).select('status').lean();
+  if (!restaurant || restaurant.status === 'SUSPENDED') throw Object.assign(new Error('Restaurant account cannot manage a menu'), { status: 403, code: 'RESTAURANT_NOT_ACTIVE' });
+  if (restaurant.status === 'ACTIVE') return;
+  const reviewed = await AccountDocument.exists({ ownerId: restaurantId, ownerRole: 'RESTAURANT', category: 'FSSAI', 'aiReview.status': 'READY_FOR_MENU' });
+  if (!reviewed) throw Object.assign(new Error('Upload an FSSAI document and complete AI screening before creating a menu draft'), { status: 403, code: 'FSSAI_REVIEW_REQUIRED' });
+}
+
+async function requireActiveRestaurant(restaurantId: string) {
+  const restaurant = await Restaurant.exists({ _id: restaurantId, status: 'ACTIVE', isVerified: true });
+  if (!restaurant) throw Object.assign(new Error('An operator must approve the restaurant before publishing its menu'), { status: 403, code: 'RESTAURANT_NOT_ACTIVE' });
+}
 
 platformRouter.post('/documents', requireRole('RESTAURANT', 'DELIVERY_PARTNER'), uploadLimiter, upload.single('file'), asyncRoute(async (request, response) => {
   if (!request.file) return response.status(400).json({ error: { code: 'FILE_REQUIRED', message: 'Choose a document to upload' } });
   const category = z.enum(['FSSAI', 'DRIVING_LICENCE', 'VEHICLE_PHOTO']).parse(request.body.category);
   if (request.auth!.role === 'RESTAURANT' && category !== 'FSSAI' || request.auth!.role === 'DELIVERY_PARTNER' && category === 'FSSAI') return response.status(400).json({ error: { code: 'INVALID_DOCUMENT_CATEGORY', message: 'Document category does not match this account type' } });
   const document = await saveAccountDocument({ ownerId: request.auth!.subject, ownerRole: request.auth!.role as 'RESTAURANT' | 'DELIVERY_PARTNER', category, originalName: request.file.originalname, mimeType: request.file.mimetype, buffer: request.file.buffer });
-  if (category === 'FSSAI') await Restaurant.updateOne({ _id: request.auth!.subject }, { $set: { fssaiDocument: document.id } });
+  const aiReview = category === 'FSSAI' ? await runFssaiReview(request.auth!.subject, document, request.file.buffer) : undefined;
   if (category === 'DRIVING_LICENCE') await DeliveryPartner.updateOne({ _id: request.auth!.subject }, { $set: { drivingLicenceDocument: document.id } });
   if (category === 'VEHICLE_PHOTO') await DeliveryPartner.updateOne({ _id: request.auth!.subject }, { $set: { vehiclePhoto: document.id } });
-  response.status(201).json({ id: document.id, category: document.category, originalName: document.originalName, contentType: document.contentType, createdAt: document.createdAt });
+  response.status(201).json({ id: document.id, category: document.category, originalName: document.originalName, contentType: document.contentType, createdAt: document.createdAt, ...(aiReview ? { aiReview } : {}) });
+}));
+
+platformRouter.post('/documents/:documentId/review', requireRole('RESTAURANT'), uploadLimiter, asyncRoute(async (request, response) => {
+  const id = idParam.parse(request.params.documentId);
+  const document: any = await AccountDocument.findOne({ _id: id, ownerId: request.auth!.subject, ownerRole: 'RESTAURANT', category: 'FSSAI' }).lean();
+  if (!document) return response.status(404).json({ error: { code: 'FSSAI_DOCUMENT_NOT_FOUND', message: 'FSSAI document not found' } });
+  const buffer = await readFile(path.join(env.UPLOAD_DIRECTORY, document.storageName));
+  const aiReview = await runFssaiReview(request.auth!.subject, document, buffer);
+  response.json({ id: document._id, aiReview });
 }));
 
 platformRouter.get('/documents/:documentId/file', requireRole('RESTAURANT', 'DELIVERY_PARTNER'), asyncRoute(async (request, response) => {
@@ -102,6 +139,7 @@ platformRouter.patch('/delivery/location', requireRole('DELIVERY_PARTNER'), asyn
 }));
 
 platformRouter.put('/restaurant/menu', requireRole('RESTAURANT'), asyncRoute(async (request, response) => {
+  await requireActiveRestaurant(request.auth!.subject);
   const items = z.array(z.object({ name: z.string().min(1).max(120), description: z.string().max(500).optional(), category: z.string().min(1).max(80), price: z.number().nonnegative(), availableQuantity: z.number().int().nonnegative(), isAvailable: z.boolean().optional() })).max(300).parse(request.body.items);
   const menu = await Menu.findOneAndUpdate({ restaurantId: request.auth!.subject }, { $set: { items, published: request.body.published === true } }, { upsert: true, new: true, runValidators: true });
   response.json(menu);
@@ -114,6 +152,7 @@ platformRouter.get('/restaurant/menu/own', requireRole('RESTAURANT'), asyncRoute
 
 platformRouter.post('/restaurant/menu/import', requireRole('RESTAURANT'), uploadLimiter, upload.single('file'), asyncRoute(async (request, response) => {
   if (!request.file) return response.status(400).json({ error: { code: 'FILE_REQUIRED', message: 'Choose a menu file to import' } });
+  await requireMenuDraftAccess(request.auth!.subject);
   const draft = await createMenuImport({ restaurantId: request.auth!.subject, file: request.file });
   response.status(201).json(draft);
 }));
@@ -123,6 +162,7 @@ platformRouter.get('/restaurant/menu/imports', requireRole('RESTAURANT'), asyncR
 }));
 
 platformRouter.patch('/restaurant/menu/imports/:importId', requireRole('RESTAURANT'), asyncRoute(async (request, response) => {
+  await requireMenuDraftAccess(request.auth!.subject);
   const id = idParam.parse(request.params.importId);
   const items = z.array(z.object({ name: z.string().trim().min(1).max(120), description: z.string().max(500).optional(), category: z.string().trim().min(1).max(80), price: z.number().nonnegative(), availableQuantity: z.number().int().nonnegative(), isAvailable: z.boolean().optional() })).min(1).max(300).parse(request.body.items);
   const draft = await MenuImport.findOneAndUpdate({ _id: id, restaurantId: request.auth!.subject, status: 'DRAFT' }, { $set: { items } }, { new: true, runValidators: true });
@@ -131,6 +171,7 @@ platformRouter.patch('/restaurant/menu/imports/:importId', requireRole('RESTAURA
 }));
 
 platformRouter.post('/restaurant/menu/imports/:importId/publish', requireRole('RESTAURANT'), asyncRoute(async (request, response) => {
+  await requireActiveRestaurant(request.auth!.subject);
   const id = idParam.parse(request.params.importId);
   const draft = await MenuImport.findOne({ _id: id, restaurantId: request.auth!.subject, status: 'DRAFT' });
   if (!draft) return response.status(404).json({ error: { code: 'MENU_IMPORT_NOT_FOUND', message: 'Draft menu import not found' } });
