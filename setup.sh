@@ -57,7 +57,9 @@ else
 fi
 
 if [[ ! -f .env ]]; then
-  echo "ℹ️ No .env file created. Add MongoDB, Redis, JWT, and Groq settings when requested."
+  umask 077
+  touch .env
+  echo "ℹ️ Created an empty .env. Add MongoDB, Redis, JWT, and Groq settings before starting the app."
 fi
 
 echo ""
