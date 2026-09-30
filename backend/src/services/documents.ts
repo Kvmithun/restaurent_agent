@@ -54,8 +54,10 @@ export async function saveAccountDocument(input: { ownerId: string; ownerRole: R
 }
 
 export async function createMenuImport(input: { restaurantId: string; file: { originalname: string; mimetype: string; buffer: Buffer } }) {
+  const menuKind = detectFileKind(input.file.buffer, input.file.mimetype);
+  if (!menuKind || !['jpeg', 'png', 'webp'].includes(menuKind)) throw Object.assign(new Error('Upload a menu photo in JPG, PNG, or WebP format'), { status: 400, code: 'MENU_IMAGE_REQUIRED' });
   const doc = await saveAccountDocument({ ownerId: input.restaurantId, ownerRole: 'RESTAURANT', category: 'MENU', originalName: input.file.originalname, mimeType: input.file.mimetype, buffer: input.file.buffer });
-  const kind = detectFileKind(input.file.buffer, input.file.mimetype)!;
+  const kind = menuKind;
   try {
     const items = await extractMenu(input.file.buffer, kind);
     return await MenuImport.create({ restaurantId: input.restaurantId, documentId: doc._id, items, status: 'DRAFT' });

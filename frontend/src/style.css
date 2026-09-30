@@ -39,4 +39,13 @@ input, select { padding: .8rem; border: 1px solid #d8cfc1; border-radius: 8px; b
 .actions { display: flex; flex-wrap: wrap; gap: .5rem; margin-top: 1rem; }
 .menu-editor { margin-top: 3rem; }
 .menu-fields { display: grid; grid-template-columns: 2fr 1fr 1fr 1fr; gap: .5rem; }
+textarea { width: 100%; padding: .8rem; border: 1px solid #d8cfc1; border-radius: 8px; background: white; font: inherit; resize: vertical; }
+.role-summary { display: flex; gap: 1rem; margin: 1.5rem 0 2.5rem; }
+.role-summary > div { display: grid; gap: .3rem; min-width: 190px; padding: 1.1rem 1.3rem; background: #f4ede3; border: 1px solid #e8e0d3; border-radius: 12px; }
+.role-summary strong { color: #a84e27; font-size: 1.7rem; }
+.role-summary span { color: #625c52; font-size: .9rem; }
+.workspace > h2 { margin-top: 2.4rem; }
+.checkout { margin-top: 2rem; }
+.checkout h2 { margin-top: 0; }
+.card > p:first-of-type { text-transform: capitalize; }
 @media (max-width: 640px) { main { margin: 3vh 1rem; padding: 1.5rem; } .topbar { padding: 1rem; } .topbar nav { gap: .6rem; } .menu-item { align-items: flex-start; flex-direction: column; } }
