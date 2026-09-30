@@ -12,6 +12,7 @@ const schema = z.object({
   REDIS_URL: z.string().min(1),
   JWT_SECRET: z.string().min(32, 'JWT_SECRET must contain at least 32 characters'),
   GROQ_API_KEY: z.string().optional().default(''),
+  TAVILY_API_KEY: z.string().optional().default(''),
   ADMIN_REVIEW_TOKEN: z.string().refine((value) => !value || value.length >= 32, 'ADMIN_REVIEW_TOKEN must be empty or at least 32 characters').optional().default(''),
   GROQ_VISION_MODEL: z.string().default('qwen/qwen3.6-27b'),
   UPLOAD_DIRECTORY: z.string().default(`${process.cwd()}/private_uploads`),
