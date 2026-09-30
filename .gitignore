@@ -2,6 +2,7 @@ node_modules/
 .pnpm-store/
 dist/
 coverage/
+private_uploads/
 .env
 .env.*
 !.env.example

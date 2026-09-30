@@ -1,9 +1,7 @@
-# Database plan
+# Database and file storage
 
-MongoDB stores durable account, restaurant, delivery partner, menu, order, and attempt records. Recommended collections are User, Restaurant, DeliveryPartner, Menu, Order, and OrderAttempt, with document metadata collections added when upload support is implemented.
+MongoDB contains separate User, Restaurant, DeliveryPartner, Menu, MenuImport, AccountDocument, Order, OrderAttempt, and FailedSession models. Passwords are bcrypt hashes. Geospatial data uses GeoJSON points. MongoDB transactions are required for stock reservation/restoration and order creation.
 
-Restaurant and user locations should use GeoJSON points with `2dsphere` indexes. Inventory updates and order creation must use atomic conditional updates or transactions so the available quantity cannot become negative. Prices and item identity are snapshotted onto order items at purchase time.
+MenuImport retains extracted drafts and marks them published after the restaurant confirms the reviewed values. AccountDocument stores ownership, category, original filename, MIME type, and a random storage key. The corresponding file is stored privately under `UPLOAD_DIRECTORY`; account owners and token-authenticated operators are the only API paths to download it. Keep this directory private and backed up. A multi-instance or production deployment should replace the local adapter with private object storage.
 
-Redis is not a database for completed orders. Its session key is short lived and expires according to `SESSION_TTL_SECONDS`.
-
-Mongoose connection startup is scaffolded; schemas, indexes, repositories, and transaction workflows have not yet been implemented.
+Redis stores only expiring active AI sessions and is not the permanent order store. `SESSION_TTL_SECONDS` controls the session TTL.

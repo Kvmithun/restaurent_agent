@@ -1,12 +1,20 @@
 import { Router } from 'express';
+import { rateLimit } from 'express-rate-limit';
 import { z } from 'zod';
+import multer from 'multer';
+import { createReadStream } from 'node:fs';
+import path from 'node:path';
 import { authenticateJWT, requireRole, type AuthRequest } from '../middleware/auth.js';
-import { DeliveryPartner, Menu, Order, Restaurant, User } from '../models/index.js';
+import { AccountDocument, DeliveryPartner, Menu, MenuImport, Order, Restaurant, User } from '../models/index.js';
 import { assignDelivery, createOrder, listOrders, reportFailure, transitionOrder } from '../services/orders.js';
+import { createMenuImport, saveAccountDocument } from '../services/documents.js';
+import { env } from '../config/env.js';
 
 export const platformRouter = Router();
 const idParam = z.string().regex(/^[a-f\d]{24}$/i);
 const asyncRoute = (fn: (request: AuthRequest, response: any) => Promise<unknown>) => (request: AuthRequest, response: any, next: any) => Promise.resolve(fn(request, response)).catch(next);
+const upload = multer({ storage: multer.memoryStorage(), limits: { fileSize: 10 * 1024 * 1024, files: 1 } });
+const uploadLimiter = rateLimit({ windowMs: 60 * 60_000, limit: 20, standardHeaders: 'draft-7', legacyHeaders: false });
 platformRouter.use(authenticateJWT);
 
 platformRouter.get('/account/profile', asyncRoute(async (request, response) => {
@@ -14,6 +22,31 @@ platformRouter.get('/account/profile', asyncRoute(async (request, response) => {
   const account = await Model.findById(request.auth!.subject).select('-passwordHash').lean();
   if (!account) return response.status(404).json({ error: { code: 'ACCOUNT_NOT_FOUND', message: 'Account not found' } });
   response.json({ ...account, role: request.auth!.role });
+}));
+
+platformRouter.get('/documents', requireRole('RESTAURANT', 'DELIVERY_PARTNER'), asyncRoute(async (request, response) => {
+  response.json(await AccountDocument.find({ ownerId: request.auth!.subject, ownerRole: request.auth!.role }).select('category originalName contentType createdAt').sort({ createdAt: -1 }).lean());
+}));
+
+platformRouter.post('/documents', requireRole('RESTAURANT', 'DELIVERY_PARTNER'), uploadLimiter, upload.single('file'), asyncRoute(async (request, response) => {
+  if (!request.file) return response.status(400).json({ error: { code: 'FILE_REQUIRED', message: 'Choose a document to upload' } });
+  const category = z.enum(['FSSAI', 'DRIVING_LICENCE', 'VEHICLE_PHOTO']).parse(request.body.category);
+  if (request.auth!.role === 'RESTAURANT' && category !== 'FSSAI' || request.auth!.role === 'DELIVERY_PARTNER' && category === 'FSSAI') return response.status(400).json({ error: { code: 'INVALID_DOCUMENT_CATEGORY', message: 'Document category does not match this account type' } });
+  const document = await saveAccountDocument({ ownerId: request.auth!.subject, ownerRole: request.auth!.role as 'RESTAURANT' | 'DELIVERY_PARTNER', category, originalName: request.file.originalname, mimeType: request.file.mimetype, buffer: request.file.buffer });
+  if (category === 'FSSAI') await Restaurant.updateOne({ _id: request.auth!.subject }, { $set: { fssaiDocument: document.id } });
+  if (category === 'DRIVING_LICENCE') await DeliveryPartner.updateOne({ _id: request.auth!.subject }, { $set: { drivingLicenceDocument: document.id } });
+  if (category === 'VEHICLE_PHOTO') await DeliveryPartner.updateOne({ _id: request.auth!.subject }, { $set: { vehiclePhoto: document.id } });
+  response.status(201).json({ id: document.id, category: document.category, originalName: document.originalName, contentType: document.contentType, createdAt: document.createdAt });
+}));
+
+platformRouter.get('/documents/:documentId/file', requireRole('RESTAURANT', 'DELIVERY_PARTNER'), asyncRoute(async (request, response) => {
+  const id = idParam.parse(request.params.documentId);
+  const document: any = await AccountDocument.findOne({ _id: id, ownerId: request.auth!.subject, ownerRole: request.auth!.role }).lean();
+  if (!document) return response.status(404).json({ error: { code: 'DOCUMENT_NOT_FOUND', message: 'Document not found' } });
+  response.setHeader('Content-Type', document.contentType);
+  response.setHeader('Content-Disposition', `attachment; filename="${encodeURIComponent(document.originalName)}"`);
+  response.setHeader('X-Content-Type-Options', 'nosniff');
+  createReadStream(path.join(env.UPLOAD_DIRECTORY, document.storageName)).pipe(response);
 }));
 
 platformRouter.get('/restaurants', requireRole('USER'), asyncRoute(async (request, response) => {
@@ -53,6 +86,40 @@ platformRouter.patch('/delivery/location', requireRole('DELIVERY_PARTNER'), asyn
 platformRouter.put('/restaurant/menu', requireRole('RESTAURANT'), asyncRoute(async (request, response) => {
   const items = z.array(z.object({ name: z.string().min(1).max(120), description: z.string().max(500).optional(), category: z.string().min(1).max(80), price: z.number().nonnegative(), availableQuantity: z.number().int().nonnegative(), isAvailable: z.boolean().optional() })).max(300).parse(request.body.items);
   const menu = await Menu.findOneAndUpdate({ restaurantId: request.auth!.subject }, { $set: { items, published: request.body.published === true } }, { upsert: true, new: true, runValidators: true });
+  response.json(menu);
+}));
+
+platformRouter.get('/restaurant/menu/own', requireRole('RESTAURANT'), asyncRoute(async (request, response) => {
+  const menu = await Menu.findOne({ restaurantId: request.auth!.subject }).lean();
+  response.json(menu ?? { items: [], published: false });
+}));
+
+platformRouter.post('/restaurant/menu/import', requireRole('RESTAURANT'), uploadLimiter, upload.single('file'), asyncRoute(async (request, response) => {
+  if (!request.file) return response.status(400).json({ error: { code: 'FILE_REQUIRED', message: 'Choose a menu file to import' } });
+  const draft = await createMenuImport({ restaurantId: request.auth!.subject, file: request.file });
+  response.status(201).json(draft);
+}));
+
+platformRouter.get('/restaurant/menu/imports', requireRole('RESTAURANT'), asyncRoute(async (request, response) => {
+  response.json(await MenuImport.find({ restaurantId: request.auth!.subject }).sort({ createdAt: -1 }).lean());
+}));
+
+platformRouter.patch('/restaurant/menu/imports/:importId', requireRole('RESTAURANT'), asyncRoute(async (request, response) => {
+  const id = idParam.parse(request.params.importId);
+  const items = z.array(z.object({ name: z.string().trim().min(1).max(120), description: z.string().max(500).optional(), category: z.string().trim().min(1).max(80), price: z.number().nonnegative(), availableQuantity: z.number().int().nonnegative(), isAvailable: z.boolean().optional() })).min(1).max(300).parse(request.body.items);
+  const draft = await MenuImport.findOneAndUpdate({ _id: id, restaurantId: request.auth!.subject, status: 'DRAFT' }, { $set: { items } }, { new: true, runValidators: true });
+  if (!draft) return response.status(404).json({ error: { code: 'MENU_IMPORT_NOT_FOUND', message: 'Draft menu import not found' } });
+  response.json(draft);
+}));
+
+platformRouter.post('/restaurant/menu/imports/:importId/publish', requireRole('RESTAURANT'), asyncRoute(async (request, response) => {
+  const id = idParam.parse(request.params.importId);
+  const draft = await MenuImport.findOne({ _id: id, restaurantId: request.auth!.subject, status: 'DRAFT' });
+  if (!draft) return response.status(404).json({ error: { code: 'MENU_IMPORT_NOT_FOUND', message: 'Draft menu import not found' } });
+  const items = z.array(z.object({ name: z.string().trim().min(1).max(120), description: z.string().max(500).optional(), category: z.string().trim().min(1).max(80), price: z.number().finite().nonnegative(), availableQuantity: z.number().int().nonnegative(), isAvailable: z.boolean().optional() })).min(1).max(300).parse(draft.items.map((item: any) => item.toObject()));
+  const menu = await Menu.findOneAndUpdate({ restaurantId: request.auth!.subject }, { $set: { items, published: true } }, { upsert: true, new: true, runValidators: true });
+  draft.status = 'PUBLISHED';
+  await draft.save();
   response.json(menu);
 }));
 

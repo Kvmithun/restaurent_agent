@@ -2,20 +2,17 @@
 
 ```mermaid
 flowchart TD
-  UI[React] --> API[Express API]
-  API --> REST[Normal APIs]
-  API --> AI[AI API]
+  UI[React customer, restaurant, delivery, operator] --> API[Express API]
+  API --> REST[Authenticated business APIs]
+  API --> AI[AI ordering and menu import]
   REST --> DB[(MongoDB: persistent truth)]
   AI --> GRAPH[LangGraph orchestration]
-  GRAPH --> LLM[Groq: language only]
+  GRAPH --> LLM[Groq: extraction and wording]
   GRAPH --> DB
   GRAPH --> REDIS[(Redis: active session state)]
-  DB --> U[Users]
-  DB --> R[Restaurants and menus]
-  DB --> D[Delivery partners]
-  DB --> O[Orders and attempts]
+  API --> FILES[Private local upload directory]
 ```
 
-React communicates through Express. Normal APIs and AI workflow nodes use domain services and repositories; route handlers do not own business rules. MongoDB is the permanent source of truth. Redis contains expiring conversation and graph state. The model can interpret and phrase requests but cannot write data or decide availability, price, assignment, or lifecycle status.
+Normal routes validate and authorize requests, then call deterministic services. MongoDB stores accounts, menu drafts, document metadata, orders, attempts, and failed sessions. Redis stores expiring AI ordering sessions. Local private files store submitted account documents and source menu files. Production deployments need a durable private object store shared by backend instances.
 
-The first implementation milestone establishes this boundary and typed session contract. Domain models, authentication, ordering, restaurant operations, delivery, and AI graph nodes are added as subsequent milestones. See [api.md](api.md), [database.md](database.md), [ai-agent.md](ai-agent.md), and [deployment.md](deployment.md) for the planned contracts and current gaps.
+The LLM can extract intent and menu entries or phrase a verified response. It cannot update orders, inventory, availability, account status, or delivery assignment. Inventory reservations and order status changes are backend-controlled. Menu extraction produces a reviewable draft; it never publishes parsed items without an explicit restaurant action.

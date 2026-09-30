@@ -21,6 +21,7 @@ export function createApp() {
   app.use((_request, response) => response.status(404).json({ error: { code: 'NOT_FOUND', message: 'Route not found' } }));
   app.use((error: unknown, _request: express.Request, response: express.Response, _next: express.NextFunction) => {
     const err = error as Error & { status?: number; code?: string; name?: string; errors?: Record<string, { message: string }> };
+    if (err.name === 'MulterError') return response.status(400).json({ error: { code: 'UPLOAD_REJECTED', message: err.message } });
     if (err.name === 'ZodError') return response.status(400).json({ error: { code: 'VALIDATION_ERROR', message: err.message } });
     if (err.name === 'ValidationError') return response.status(400).json({ error: { code: 'VALIDATION_ERROR', message: err.message } });
     if (err.name === 'MongoServerError' && (err as Error & { code?: number }).code === 11000) return response.status(409).json({ error: { code: 'DUPLICATE_ACCOUNT', message: 'An account with these details already exists' } });

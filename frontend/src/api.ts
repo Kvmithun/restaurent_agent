@@ -1,4 +1,4 @@
-const API_URL = import.meta.env.VITE_API_URL ?? 'http://localhost:4000/api';
+export const API_URL = import.meta.env.VITE_API_URL ?? 'http://localhost:4000/api';
 export interface Account { id: string; role: 'USER' | 'RESTAURANT' | 'DELIVERY_PARTNER' }
 export interface AuthPayload { token: string; tokenType: string; expiresIn: number; user: Account }
 export function getToken() { return localStorage.getItem('restaurant-token'); }
@@ -6,6 +6,16 @@ export async function api<T>(path: string, options: RequestInit = {}): Promise<T
   const response = await fetch(`${API_URL}${path}`, { ...options, headers: { 'content-type': 'application/json', ...(getToken() ? { authorization: `Bearer ${getToken()}` } : {}), ...options.headers } });
   const data = await response.json().catch(() => ({}));
   if (!response.ok) throw new Error(data?.error?.message ?? `Request failed (${response.status})`);
+  return data as T;
+}
+
+export async function uploadFile<T>(path: string, file: File, fields: Record<string, string> = {}): Promise<T> {
+  const form = new FormData();
+  form.set('file', file);
+  for (const [key, value] of Object.entries(fields)) form.set(key, value);
+  const response = await fetch(`${API_URL}${path}`, { method: 'POST', headers: getToken() ? { authorization: `Bearer ${getToken()}` } : {}, body: form });
+  const data = await response.json().catch(() => ({}));
+  if (!response.ok) throw new Error(data?.error?.message ?? `Upload failed (${response.status})`);
   return data as T;
 }
 

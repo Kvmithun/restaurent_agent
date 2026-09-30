@@ -1,31 +1,15 @@
-# AI ordering workflow
+# AI ordering and menu extraction
 
-## Trust boundary
+## Ordering workflow
 
-The model is used only for intent recognition, entity/quantity extraction, and conversational wording. It never receives tools that can mutate MongoDB or change order status. Every extracted object must be schema validated before a deterministic service acts on it.
+The LangGraph state stores the user, messages, selected restaurant, cart, authoritative availability, order ID, lifecycle status, retry counts, and TTL timestamps. Redis stores the active state; MongoDB remains authoritative for menus, inventory, orders, and failure records.
 
-## Planned graph
+The graph uses Groq for structured intent/item extraction, deterministic MongoDB menu lookup and quantity checks, explicit user confirmation, and response generation. Order creation occurs only after confirmation and rechecks inventory transactionally. Restaurant acceptance and delivery completion remain role-authorized API actions.
 
-```mermaid
-flowchart LR
-  A[Intent] --> B[Resolve restaurant]
-  B --> C[Read menu]
-  C --> D[Extract requested items]
-  D --> E[Validate availability]
-  E --> F{User confirms}
-  F -->|yes| G[Create order]
-  F -->|no or shortage| H[Clarify or revise]
-  G --> I[Restaurant workflow]
-  I --> J[Delivery workflow]
-  J --> K[Verified completion]
-```
+SSE forwards response-generation tokens as they arrive. SSE content does not mutate order state.
 
-Business nodes read and write through domain services. The model cannot declare a session complete. Session state and graph checkpoints are intended for Redis; durable orders and terminal failure records belong in MongoDB.
+## Menu import
 
-## Streaming
+Restaurant uploads accept PDF, JPEG, PNG, WebP, CSV, JSON, and text, limited to 10 MB. PDF text is extracted locally; scanned PDF pages and image files are sent to the configured Groq vision model for OCR and extraction. The model output is validated against a strict schema and stored as a draft. A restaurant owner can correct every field before publishing. Zero values mark missing/unclear price or quantity for review; the system never treats a model guess as a confirmed price or stock count.
 
-The planned AI endpoint uses SSE. Text may stream to the browser, but partial output has no authority to create an order. The backend validates structured extraction and availability before any state mutation.
-
-## Current status
-
-The typed state and infrastructure boundary are scaffolded. Prompt modules, validated extraction, graph nodes, and SSE are subsequent milestones and are not yet wired.
+Configure `GROQ_API_KEY`, `GROQ_MODEL`, and `GROQ_VISION_MODEL`. The default vision model is `qwen/qwen3.6-27b`.

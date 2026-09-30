@@ -18,12 +18,12 @@ export const User = createAccountModel('User');
 export const Restaurant = createAccountModel('Restaurant', {
   restaurantName: { type: String, required: true, trim: true }, ownerName: { type: String, required: true, trim: true },
   fssaiNumber: String, fssaiDocument: String, status: { type: String, enum: ['PENDING', 'ACTIVE', 'SUSPENDED'], default: 'PENDING' },
-  isVerified: { type: Boolean, default: false }, location: point,
+  isVerified: { type: Boolean, default: false }, reviewReason: String, reviewedAt: Date, location: point,
 });
 export const DeliveryPartner = createAccountModel('DeliveryPartner', {
   vehicleType: { type: String, required: true }, vehicleNumber: { type: String, required: true }, drivingLicenceDocument: String,
   vehiclePhoto: String, status: { type: String, enum: ['PENDING', 'ACTIVE', 'SUSPENDED'], default: 'PENDING' },
-  isAvailable: { type: Boolean, default: true }, currentLocation: point,
+  isAvailable: { type: Boolean, default: true }, currentLocation: point, reviewReason: String, reviewedAt: Date,
 });
 
 const menuItemSchema = new Schema({
@@ -58,3 +58,16 @@ export const FailedSession = mongoose.models.FailedSession ?? mongoose.model('Fa
   orderId: { type: Schema.Types.ObjectId, ref: 'Order' }, failureStage: { type: String, required: true }, failureReason: { type: String, required: true },
   retryCounts: { user: Number, cooking: Number, delivery: Number },
 }, { timestamps: true }));
+
+export const AccountDocument = mongoose.models.AccountDocument ?? mongoose.model('AccountDocument', new Schema({
+  ownerId: { type: Schema.Types.ObjectId, required: true, index: true }, ownerRole: { type: String, enum: ['RESTAURANT', 'DELIVERY_PARTNER'], required: true },
+  category: { type: String, enum: ['FSSAI', 'DRIVING_LICENCE', 'VEHICLE_PHOTO', 'MENU'], required: true },
+  originalName: { type: String, required: true }, storageName: { type: String, required: true, unique: true }, contentType: { type: String, required: true },
+}, { timestamps: true, versionKey: false }));
+
+export const MenuImport = mongoose.models.MenuImport ?? mongoose.model('MenuImport', new Schema({
+  restaurantId: { type: Schema.Types.ObjectId, ref: 'Restaurant', required: true, index: true },
+  documentId: { type: Schema.Types.ObjectId, ref: 'AccountDocument', required: true },
+  status: { type: String, enum: ['DRAFT', 'PUBLISHED'], default: 'DRAFT' },
+  items: { type: [menuItemSchema], default: [] },
+}, { timestamps: true, versionKey: false }));
