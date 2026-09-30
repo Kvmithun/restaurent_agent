@@ -26,7 +26,7 @@ export function createApp() {
     if (err.name === 'ValidationError') return response.status(400).json({ error: { code: 'VALIDATION_ERROR', message: err.message } });
     if (err.name === 'MongoServerError' && (err as Error & { code?: number }).code === 11000) return response.status(409).json({ error: { code: 'DUPLICATE_ACCOUNT', message: 'An account with these details already exists' } });
     const status = err.status ?? 500;
-    if (status >= 500) console.error(JSON.stringify({ event: 'request.failed', error: err.message }));
+    if (status >= 500) console.error(JSON.stringify({ event: 'request.failed', errorName: err.name ?? 'Error', errorCode: err.code ?? 'INTERNAL_ERROR' }));
     return response.status(status).json({ error: { code: err.code ?? 'INTERNAL_ERROR', message: status >= 500 ? 'An unexpected error occurred' : err.message } });
   });
   return app;

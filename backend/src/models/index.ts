@@ -1,6 +1,10 @@
 import mongoose, { Schema, type Model } from 'mongoose';
 
-const point = { type: { type: String, enum: ['Point'], default: 'Point' }, coordinates: { type: [Number], default: undefined } };
+const pointSchema = new Schema({
+  type: { type: String, enum: ['Point'], required: true },
+  coordinates: { type: [Number], required: true, default: undefined },
+}, { _id: false });
+const point = { type: pointSchema, default: undefined };
 const accountFields = {
   name: { type: String, required: true, trim: true }, email: { type: String, required: true, lowercase: true, trim: true },
   phone: { type: String, required: true, trim: true }, passwordHash: { type: String, required: true },
