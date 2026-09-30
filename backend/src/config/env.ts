@@ -16,7 +16,7 @@ const schema = z.object({
   NOMINATIM_USER_AGENT: z.string().default('TableTrail/1.0 (restaurant ordering application)'),
   OSRM_BASE_URL: z.string().url().default('https://router.project-osrm.org'),
   ADMIN_REVIEW_TOKEN: z.string().refine((value) => !value || value.length >= 32, 'ADMIN_REVIEW_TOKEN must be empty or at least 32 characters').optional().default(''),
-  GROQ_VISION_MODEL: z.string().default('qwen/qwen3.6-27b'),
+  GROQ_VISION_MODEL: z.string().default('qwen/qwen3.8-27b'),
   UPLOAD_DIRECTORY: z.string().default(`${process.cwd()}/private_uploads`),
   GROQ_MODEL: z.string().default('openai/gpt-oss-120b'),
   FRONTEND_URL: z.string().url().default('http://localhost:5173'),
