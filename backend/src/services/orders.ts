@@ -4,6 +4,7 @@ import { env } from '../config/env.js';
 import { FailedSession, Menu, Order, OrderAttempt, Restaurant, User, DeliveryPartner } from '../models/index.js';
 import { isAllowedOrderTransition } from '../domain/orders/transitions.js';
 import { redis } from '../infra/connections.js';
+import { geocodeAddress, pointFromCoordinates, roadRoute, straightLineMeters } from './geo.js';
 
 const requestSchema = z.object({ restaurantId: z.string().regex(/^[a-f\d]{24}$/i), sessionId: z.string().uuid().optional(), userAttemptNumber: z.number().int().positive().optional(), deliveryAddress: z.string().trim().min(5).max(500).optional(), items: z.array(z.object({ dishId: z.string().regex(/^[a-f\d]{24}$/i), quantity: z.number().int().positive().max(50) })).min(1).max(30) });
 
@@ -34,6 +35,28 @@ export async function createOrder(userId: string, input: unknown) {
     const existing = await Order.findOne({ sessionId: data.sessionId, userId });
     if (existing) return existing.toJSON();
   }
+  const [restaurantForGeo, userForGeo] = await Promise.all([
+    Restaurant.findOne({ _id: data.restaurantId, status: 'ACTIVE', isVerified: true }).select('restaurantName address location').lean(),
+    User.findById(userId).select('address').lean(),
+  ]);
+  const restaurantDetails: any = restaurantForGeo;
+  const userDetails: any = userForGeo;
+  const deliveryAddress = data.deliveryAddress ?? userDetails?.address ?? '';
+  const deliveryLocation = (await geocodeAddress(deliveryAddress))?.point ?? null;
+  const savedRestaurantLocation = pointFromCoordinates(restaurantDetails?.location);
+  let restaurantLocation = savedRestaurantLocation;
+  if (!restaurantLocation && restaurantDetails?.address) {
+    const geocoded = await geocodeAddress(restaurantDetails.address, restaurantDetails.restaurantName);
+    restaurantLocation = geocoded?.point ?? null;
+    if (restaurantLocation) await Restaurant.updateOne({ _id: restaurantDetails._id }, { $set: { location: restaurantLocation } });
+  }
+  const restaurantToCustomer = restaurantLocation && deliveryLocation ? await roadRoute(restaurantLocation, deliveryLocation) : null;
+  const distance = restaurantToCustomer ? {
+    restaurantToCustomerMeters: restaurantToCustomer.distanceMeters,
+    restaurantToCustomerSeconds: restaurantToCustomer.durationSeconds,
+  } : restaurantLocation && deliveryLocation ? {
+    restaurantToCustomerMeters: straightLineMeters(restaurantLocation, deliveryLocation),
+  } : undefined;
   const session = await mongoose.startSession();
   let result: unknown;
   try {
@@ -53,7 +76,7 @@ export async function createOrder(userId: string, input: unknown) {
         items.push({ dishId: menuItem._id, dishName: menuItem.name, quantity: requested.quantity, price: menuItem.price });
       }
       const total = items.reduce((sum, item) => sum + item.price * item.quantity, 0);
-      const [order] = await Order.create([{ userId, restaurantId: restaurant._id, sessionId: data.sessionId, items, total, deliveryAddress: data.deliveryAddress ?? user.address }], { session });
+      const [order] = await Order.create([{ userId, restaurantId: restaurant._id, sessionId: data.sessionId, items, total, deliveryAddress, ...(deliveryLocation ? { deliveryLocation } : {}), ...(distance ? { distance } : {}) }], { session });
       await OrderAttempt.create([{ orderId: order._id, sessionId: data.sessionId, attemptType: 'USER', attemptNumber: data.userAttemptNumber ?? 1, status: 'SUCCEEDED', reason: 'User confirmed order' }], { session });
       result = order.toJSON();
     });
@@ -127,9 +150,41 @@ export async function transitionOrder(orderId: string, actorId: string, role: 'U
 export async function assignDelivery(orderId: string) {
   const order = await Order.findOne({ _id: orderId, status: 'READY_FOR_PICKUP' });
   if (!order) throw Object.assign(new Error('Order is not ready for delivery assignment'), { status: 409, code: 'ORDER_NOT_READY' });
-  const partner = await DeliveryPartner.findOneAndUpdate({ isAvailable: true, status: 'ACTIVE' }, { isAvailable: false }, { new: true, sort: { createdAt: 1 } });
+  const [restaurantRaw, available] = await Promise.all([
+    Restaurant.findById(order.restaurantId).select('location address restaurantName').lean(),
+    DeliveryPartner.find({ isAvailable: true, status: 'ACTIVE' }).select('location currentLocation address createdAt').sort({ createdAt: 1 }).limit(50).lean(),
+  ]);
+  const restaurant: any = restaurantRaw;
+  const restaurantPoint = pointFromCoordinates(restaurant?.location) ?? (restaurant?.address ? (await geocodeAddress(restaurant.address, restaurant.restaurantName))?.point ?? null : null);
+  const candidates: Array<{ partner: any; point: ReturnType<typeof pointFromCoordinates>; straightDistance: number; roadDistance?: number }> = [];
+  for (const partner of available) {
+    let point = pointFromCoordinates(partner.currentLocation) ?? pointFromCoordinates(partner.location);
+    if (!point && partner.address) {
+      void geocodeAddress(partner.address).then((match) => match?.point && DeliveryPartner.updateOne({ _id: partner._id }, { $set: { location: match.point } })).catch(() => undefined);
+    }
+    candidates.push({ partner, point, straightDistance: point && restaurantPoint ? straightLineMeters(point, restaurantPoint) : Number.POSITIVE_INFINITY });
+  }
+  candidates.sort((left, right) => left.straightDistance - right.straightDistance || new Date(left.partner.createdAt).getTime() - new Date(right.partner.createdAt).getTime());
+  if (restaurantPoint) {
+    const closest = candidates.filter((candidate) => candidate.point).slice(0, 10);
+    const routes = await Promise.all(closest.map((candidate) => roadRoute(candidate.point!, restaurantPoint)));
+    closest.forEach((candidate, index) => { candidate.roadDistance = routes[index]?.distanceMeters; });
+    candidates.sort((left, right) => (left.roadDistance ?? left.straightDistance) - (right.roadDistance ?? right.straightDistance) || new Date(left.partner.createdAt).getTime() - new Date(right.partner.createdAt).getTime());
+  }
+  const selected = candidates[0];
+  const partner = selected ? await DeliveryPartner.findOneAndUpdate({ _id: selected.partner._id, isAvailable: true, status: 'ACTIVE' }, { isAvailable: false }, { new: true }) : null;
   if (!partner) throw Object.assign(new Error('No delivery partner is currently available'), { status: 409, code: 'NO_DELIVERY_PARTNER' });
-  const updated = await Order.findOneAndUpdate({ _id: order._id, status: 'READY_FOR_PICKUP' }, { $set: { deliveryPartnerId: partner._id as Types.ObjectId, deliveryStatus: 'ASSIGNED', status: 'DELIVERY_ASSIGNED' } }, { new: true });
+  const partnerPoint = pointFromCoordinates(partner.currentLocation) ?? pointFromCoordinates(partner.location);
+  const [partnerToRestaurant, partnerToCustomer] = partnerPoint ? await Promise.all([
+    restaurantPoint ? roadRoute(partnerPoint, restaurantPoint) : null,
+    pointFromCoordinates(order.deliveryLocation) ? roadRoute(partnerPoint, pointFromCoordinates(order.deliveryLocation)!) : null,
+  ]) : [null, null];
+  const distancePatch = {
+    ...(order.distance?.toObject?.() ?? order.distance ?? {}),
+    ...(partnerToRestaurant ? { deliveryPartnerToRestaurantMeters: partnerToRestaurant.distanceMeters, deliveryPartnerToRestaurantSeconds: partnerToRestaurant.durationSeconds } : partnerPoint && restaurantPoint ? { deliveryPartnerToRestaurantMeters: straightLineMeters(partnerPoint, restaurantPoint) } : {}),
+    ...(partnerToCustomer ? { deliveryPartnerToCustomerMeters: partnerToCustomer.distanceMeters, deliveryPartnerToCustomerSeconds: partnerToCustomer.durationSeconds } : partnerPoint && pointFromCoordinates(order.deliveryLocation) ? { deliveryPartnerToCustomerMeters: straightLineMeters(partnerPoint, pointFromCoordinates(order.deliveryLocation)!) } : {}),
+  };
+  const updated = await Order.findOneAndUpdate({ _id: order._id, status: 'READY_FOR_PICKUP' }, { $set: { deliveryPartnerId: partner._id as Types.ObjectId, deliveryStatus: 'ASSIGNED', status: 'DELIVERY_ASSIGNED', ...(Object.keys(distancePatch).length ? { distance: distancePatch } : {}) } }, { new: true });
   if (!updated) {
     await DeliveryPartner.updateOne({ _id: partner._id }, { $set: { isAvailable: true } });
     throw Object.assign(new Error('Order was assigned by another request'), { status: 409, code: 'ORDER_STATE_CONFLICT' });

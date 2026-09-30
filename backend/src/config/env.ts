@@ -13,6 +13,8 @@ const schema = z.object({
   JWT_SECRET: z.string().min(32, 'JWT_SECRET must contain at least 32 characters'),
   GROQ_API_KEY: z.string().optional().default(''),
   TAVILY_API_KEY: z.string().optional().default(''),
+  NOMINATIM_USER_AGENT: z.string().default('TableTrail/1.0 (restaurant ordering application)'),
+  OSRM_BASE_URL: z.string().url().default('https://router.project-osrm.org'),
   ADMIN_REVIEW_TOKEN: z.string().refine((value) => !value || value.length >= 32, 'ADMIN_REVIEW_TOKEN must be empty or at least 32 characters').optional().default(''),
   GROQ_VISION_MODEL: z.string().default('qwen/qwen3.6-27b'),
   UPLOAD_DIRECTORY: z.string().default(`${process.cwd()}/private_uploads`),

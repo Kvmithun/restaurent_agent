@@ -9,6 +9,7 @@ import { AccountDocument, DeliveryPartner, Menu, MenuImport, Order, OrderAttempt
 import { assignDelivery, createOrder, listOrders, reportFailure, transitionOrder } from '../services/orders.js';
 import { createMenuImport, saveAccountDocument } from '../services/documents.js';
 import { env } from '../config/env.js';
+import { geocodeAddress, pointFromCoordinates, roadRoute, straightLineMeters } from '../services/geo.js';
 
 export const platformRouter = Router();
 const idParam = z.string().regex(/^[a-f\d]{24}$/i);
@@ -50,10 +51,27 @@ platformRouter.get('/documents/:documentId/file', requireRole('RESTAURANT', 'DEL
 }));
 
 platformRouter.get('/restaurants', requireRole('USER'), asyncRoute(async (request, response) => {
-  const lat = Number(request.query.lat), lon = Number(request.query.lon);
-  const filter: Record<string, unknown> = { status: 'ACTIVE', isVerified: true };
-  if (Number.isFinite(lat) && Number.isFinite(lon) && Math.abs(lat) <= 90 && Math.abs(lon) <= 180) filter.location = { $near: { $geometry: { type: 'Point', coordinates: [lon, lat] }, $maxDistance: 30_000 } };
-  response.json(await Restaurant.find(filter).select('restaurantName address location status').limit(100).lean());
+  const user: any = await User.findById(request.auth!.subject).select('address location').lean();
+  let origin = pointFromCoordinates(user?.location);
+  if (!origin && user?.address) {
+    origin = (await geocodeAddress(user.address))?.point ?? null;
+    if (origin) await User.updateOne({ _id: request.auth!.subject }, { $set: { location: origin } });
+  }
+  const restaurants: any[] = await Restaurant.find({ status: 'ACTIVE', isVerified: true }).select('restaurantName address location status').limit(100).lean();
+  for (const restaurant of restaurants.filter((entry) => !pointFromCoordinates(entry.location)).slice(0, 10)) {
+    void geocodeAddress(restaurant.address, restaurant.restaurantName).then((match) => match?.point && Restaurant.updateOne({ _id: restaurant._id }, { $set: { location: match.point } })).catch(() => undefined);
+  }
+  if (!origin) return response.json(restaurants);
+  const candidates = restaurants.map((restaurant) => ({ restaurant, point: pointFromCoordinates(restaurant.location) }))
+    .sort((left, right) => (left.point ? straightLineMeters(origin!, left.point) : Number.POSITIVE_INFINITY) - (right.point ? straightLineMeters(origin!, right.point) : Number.POSITIVE_INFINITY));
+  const nearest = candidates.slice(0, 20);
+  const result = await Promise.all(nearest.map(async ({ restaurant, point }) => {
+    if (!point) return { ...restaurant, distanceMeters: null, distanceSeconds: null };
+    const route = await roadRoute(origin!, point);
+    return { ...restaurant, distanceMeters: route?.distanceMeters ?? straightLineMeters(origin!, point), distanceSeconds: route?.durationSeconds ?? null };
+  }));
+  result.sort((a, b) => (a.distanceMeters ?? Number.POSITIVE_INFINITY) - (b.distanceMeters ?? Number.POSITIVE_INFINITY));
+  response.json([...result, ...candidates.slice(20).map(({ restaurant }) => ({ ...restaurant, distanceMeters: null, distanceSeconds: null }))]);
 }));
 
 platformRouter.get('/restaurants/:restaurantId/menu', requireRole('USER'), asyncRoute(async (request, response) => {
